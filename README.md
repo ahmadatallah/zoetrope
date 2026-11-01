@@ -110,7 +110,7 @@ zoe <id>                     # replay a session by id, or a unique prefix of one
 zoe <file.jsonl> --follow    # open a recording at its live edge
 zoe <file.jsonl> --speed N   # playback speed (default 8.0)
 zoe --provider codex ...     # force the format instead of detecting it from the file
-zoe --transparent ...        # use the terminal's background instead of zoetrope's dark one
+zoe --transparent ...        # no canvas or card background: the terminal's own shows through
 zoe inspect <file|id>        # print the session tree and exit (no TUI)
 ```
 

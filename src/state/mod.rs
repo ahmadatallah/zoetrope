@@ -260,14 +260,10 @@ impl App {
         }
     }
 
-    /// Sit the graph on the terminal's own background instead of zoetrope's
-    /// dark one (`zoe --transparent`). `backdrop` is the terminal's background
-    /// colour, painted explicitly so it stays uniform even where the terminal
-    /// shades regions of the pane itself (e.g. a zoomed split), or
-    /// [`Color::Reset`](ratatui::style::Color::Reset) when it is unknown.
-    /// Survives session resets.
-    pub fn with_backdrop(mut self, backdrop: ratatui::style::Color) -> Self {
-        self.flow.theme = rataflow::Theme::Custom(graph::palette(Some(backdrop)));
+    /// Paint no canvas or card background, so the terminal's own background
+    /// shows through (`zoe --transparent`). Survives session resets.
+    pub fn with_transparent_background(mut self) -> Self {
+        self.flow.theme = rataflow::Theme::Custom(graph::palette(true));
         self
     }
 
@@ -1070,8 +1066,7 @@ mod tests {
 
     #[test]
     fn transparent_background_survives_session_reset() {
-        let mut app = App::new("OLD".into(), Mode::Live)
-            .with_backdrop(ratatui::style::Color::Rgb(48, 48, 48));
+        let mut app = App::new("OLD".into(), Mode::Live).with_transparent_background();
         assert!(graph::is_transparent(&app.flow.theme));
 
         app.handle_ui_event(UiEvent::SessionReset {
