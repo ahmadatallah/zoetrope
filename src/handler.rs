@@ -343,7 +343,7 @@ mod tests {
     }
 
     /// An app whose detail panel was last drawn splitting columns 0..100 at
-    /// column 30 (the default 30/70).
+    /// column 30.
     fn panel_app() -> App {
         let mut app = App::new("s".into(), Mode::Live);
         app.panel_split = Some(PanelSplit {

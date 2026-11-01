@@ -237,8 +237,9 @@ pub struct App {
     snapshots: Vec<Snapshot>,
 }
 
-/// The graph's default share of the canvas while the detail panel is open.
-pub const DEFAULT_PANEL_RATIO: f32 = 0.30;
+/// The graph's default share of the canvas while the detail panel is open:
+/// two thirds, leaving the panel one third.
+pub const DEFAULT_PANEL_RATIO: f32 = 2.0 / 3.0;
 /// Narrowest the graph strip may be dragged, in columns.
 const MIN_GRAPH_COLS: u16 = 12;
 /// Narrowest the detail panel may be dragged, in columns.
@@ -1142,7 +1143,12 @@ mod tests {
 
     #[test]
     fn panel_graph_width_keeps_both_sides_usable() {
-        assert_eq!(PanelSplit::graph_width(100, DEFAULT_PANEL_RATIO), 30);
+        assert_eq!(PanelSplit::graph_width(100, DEFAULT_PANEL_RATIO), 67);
+        // A third of 90 is under the panel's minimum, so the panel keeps 32.
+        assert_eq!(
+            PanelSplit::graph_width(90, DEFAULT_PANEL_RATIO),
+            90 - MIN_PANEL_COLS
+        );
         assert_eq!(PanelSplit::graph_width(100, 0.0), MIN_GRAPH_COLS);
         assert_eq!(PanelSplit::graph_width(100, 1.0), 100 - MIN_PANEL_COLS);
         // Too narrow for both minimums: the ratio as is.

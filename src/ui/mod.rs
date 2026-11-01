@@ -62,10 +62,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // the canvas render (borrow split: companions take &Flow, Widget is &mut).
     let selected = app.selected_agent_id();
 
-    // When an agent is selected, split the canvas for the detail panel (30/70
-    // by default; drag the panel's left edge to change it) — the panel is what
-    // you're reading; the canvas only keeps the selected node (click-centered)
-    // in view for orientation.
+    // When an agent is selected, split the canvas for the detail panel: the
+    // graph keeps two thirds by default, so the swarm stays readable around the
+    // selected (click-centered) node, and the panel takes one third. Drag the
+    // panel's left edge to change it.
     let (flow_area, panel_area) = if selected.is_some() {
         let graph_w = PanelSplit::graph_width(canvas_area.width, app.panel_ratio);
         let [left, right] = Layout::horizontal([Constraint::Length(graph_w), Constraint::Fill(1)])
