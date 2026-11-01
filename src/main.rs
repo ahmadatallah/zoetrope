@@ -10,6 +10,7 @@
 //! zoe <file> --follow       follow a file's live edge instead of replaying
 //! zoe <file> --speed N      playback speed multiplier (default 8.0)
 //! zoe --provider <name> ... force the transcript format instead of detecting it
+//! zoe --transparent ...     no canvas/card background; the terminal's shows through
 //! zoe inspect <file|id|dir> headless: print the session tree + info
 //! ```
 
@@ -39,11 +40,13 @@ pub enum Cli {
     /// start), a project dir (follow its live session), a session id, or
     /// `None` (the current project). `follow` starts at the live edge instead
     /// of replaying. `provider` forces the format instead of detecting it.
+    /// `transparent` paints no canvas or card background.
     View {
         target: Option<String>,
         follow: bool,
         speed: f64,
         provider: Option<Provider>,
+        transparent: bool,
     },
     /// Headless: parse and print the session tree + info; no TUI. The target
     /// resolves like `View`'s: a file, a session id, or a project directory.
@@ -67,6 +70,7 @@ USAGE:
     zoe <file> --follow     follow a file's live edge instead of replaying
     zoe <file> --speed N    playback speed (default 8.0)
     zoe --provider <name>   force the format (claude, codex) instead of detecting it
+    zoe --transparent       no canvas or card background; the terminal's shows through
     zoe inspect <file|id>   headless: print the session tree + info
     zoe --version           print the version and exit
 
@@ -114,6 +118,7 @@ fn parse_cli(args: impl Iterator<Item = String>) -> Result<Cli> {
     let mut follow = false;
     let mut speed = DEFAULT_REPLAY_SPEED;
     let mut provider = None;
+    let mut transparent = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-h" | "--help" => {
@@ -127,6 +132,7 @@ fn parse_cli(args: impl Iterator<Item = String>) -> Result<Cli> {
                 std::process::exit(0);
             }
             "--follow" => follow = true,
+            "--transparent" => transparent = true,
             "--speed" => {
                 let v = args
                     .next()
@@ -156,6 +162,7 @@ fn parse_cli(args: impl Iterator<Item = String>) -> Result<Cli> {
         follow,
         speed,
         provider,
+        transparent,
     })
 }
 
@@ -233,6 +240,7 @@ async fn run_tui(cli: Cli) -> Result<()> {
         follow,
         speed,
         provider,
+        transparent,
     } = cli
     else {
         unreachable!("inspect handled in main");
@@ -278,7 +286,10 @@ async fn run_tui(cli: Cli) -> Result<()> {
         }
     });
 
-    let app = App::new(session_id, mode);
+    let mut app = App::new(session_id, mode);
+    if transparent {
+        app = app.with_transparent_background();
+    }
     tui::run(app, tail_tx, ui_rx).await
 }
 
@@ -384,11 +395,13 @@ mod tests {
                 follow,
                 speed,
                 provider,
+                transparent,
             } => {
                 assert_eq!(p, "s.jsonl");
                 assert_eq!(speed, 4.0);
                 assert!(follow);
                 assert_eq!(provider, Some(Provider::Codex));
+                assert!(!transparent);
             }
             other => panic!("got {other:?}"),
         }
@@ -404,6 +417,23 @@ mod tests {
                 assert_eq!(speed, 2.5);
                 assert_eq!(provider, Some(Provider::Claude));
             }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn transparent_flag_with_or_without_a_target() {
+        for args in [
+            &["--transparent"][..],
+            &["s.jsonl", "--transparent", "--follow"],
+        ] {
+            match cli(args).unwrap() {
+                Cli::View { transparent, .. } => assert!(transparent, "{args:?}"),
+                other => panic!("got {other:?}"),
+            }
+        }
+        match cli(&[]).unwrap() {
+            Cli::View { transparent, .. } => assert!(!transparent),
             other => panic!("got {other:?}"),
         }
     }

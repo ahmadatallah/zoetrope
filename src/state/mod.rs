@@ -260,6 +260,13 @@ impl App {
         }
     }
 
+    /// Paint no canvas or card background, so the terminal's own background
+    /// shows through (`zoe --transparent`). Survives session resets.
+    pub fn with_transparent_background(mut self) -> Self {
+        self.flow.theme = rataflow::Theme::Custom(graph::palette(true));
+        self
+    }
+
     /// Derive the emergent transport state for display (status badge + scrubber
     /// tag). "Live" requires both following the edge AND a recent append, so an
     /// old session followed to its (static) edge reads `Idle`, not `Live`.
@@ -467,7 +474,10 @@ impl App {
                 let genuine = !self.is_current(&session_id) || self.flow.nodes().count() > 0;
                 self.current_session_id = session_id.clone();
                 self.session = SessionModel::new(session_id);
+                // Fresh graph, same look (e.g. `--transparent`).
+                let theme = self.flow.theme;
                 self.flow = graph::new_flow();
+                self.flow.theme = theme;
                 // A different session (or a truncated one) shares nothing with
                 // the rungs we hold, and a fresh `Timeline` restarts the
                 // generation counter — so they cannot be told apart by it.
@@ -1052,6 +1062,24 @@ mod tests {
             app.session.agent("newsub").is_some(),
             "new-session subagent must be present after auto-switch"
         );
+    }
+
+    #[test]
+    fn transparent_background_survives_session_reset() {
+        let mut app = App::new("OLD".into(), Mode::Live).with_transparent_background();
+        assert!(graph::is_transparent(&app.flow.theme));
+
+        app.handle_ui_event(UiEvent::SessionReset {
+            session_id: "NEW".into(),
+        });
+        assert!(
+            graph::is_transparent(&app.flow.theme),
+            "a session switch must not bring the background back"
+        );
+
+        // The default stays solid.
+        let app = App::new("s".into(), Mode::Live);
+        assert!(!graph::is_transparent(&app.flow.theme));
     }
 
     #[test]
