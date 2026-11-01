@@ -232,6 +232,10 @@ pub struct App {
     pub panel_split: Option<PanelSplit>,
     /// Mouse state of the panel's left edge (hovered, dragged).
     pub panel_edge: PanelEdge,
+    /// Whether the detail panel is folded to a thin rail on the right, giving
+    /// the graph the width while keeping the selection (`p`, the `▸` button,
+    /// or dragging the edge to the right). Survives session resets.
+    pub panel_collapsed: bool,
     /// Ladder of folded-model snapshots, ascending by `folded`, used to start a
     /// backward seek near its target instead of re-folding from item zero.
     snapshots: Vec<Snapshot>,
@@ -244,14 +248,21 @@ pub const DEFAULT_PANEL_RATIO: f32 = 2.0 / 3.0;
 const MIN_GRAPH_COLS: u16 = 12;
 /// Narrowest the detail panel may be dragged, in columns.
 const MIN_PANEL_COLS: u16 = 32;
+/// Width of the collapsed panel's rail, in columns (border, glyph, border).
+pub const PANEL_RAIL_COLS: u16 = 3;
 
-/// The graph/detail-panel split as drawn, for resizing it with the mouse.
+/// The graph/detail-panel split as drawn, for resizing and collapsing it with
+/// the mouse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PanelSplit {
     /// The whole area being split: graph strip on the left, panel on the right.
     pub area: ratatui::layout::Rect,
-    /// Screen column of the panel's left border, the drag handle.
+    /// Screen column of the panel's (or the rail's) left border, the drag handle.
     pub edge_x: u16,
+    /// Whether the panel is drawn collapsed, as a rail from `edge_x` rightwards.
+    pub collapsed: bool,
+    /// The `▸` collapse button in the expanded panel's top border.
+    pub button: Option<ratatui::layout::Rect>,
 }
 
 impl PanelSplit {
@@ -269,8 +280,26 @@ impl PanelSplit {
     /// Whether screen cell (`column`, `row`) grabs the edge: the panel's border
     /// column or the graph column just left of it, so it is easy to hit.
     pub fn grabs(&self, column: u16, row: u16) -> bool {
-        let rows = self.area.y..self.area.y + self.area.height;
-        rows.contains(&row) && column + 1 >= self.edge_x && column <= self.edge_x
+        self.has_row(row) && column + 1 >= self.edge_x && column <= self.edge_x
+    }
+
+    /// Whether (`column`, `row`) is on the collapse button.
+    pub fn on_button(&self, column: u16, row: u16) -> bool {
+        self.button
+            .is_some_and(|b| b.contains(ratatui::layout::Position::new(column, row)))
+    }
+
+    /// Whether (`column`, `row`) is on the collapsed rail, right of its edge: a
+    /// click there expands the panel (the edge itself still drags).
+    pub fn on_rail(&self, column: u16, row: u16) -> bool {
+        self.collapsed
+            && self.has_row(row)
+            && column > self.edge_x
+            && column < self.area.x + self.area.width
+    }
+
+    fn has_row(&self, row: u16) -> bool {
+        (self.area.y..self.area.y + self.area.height).contains(&row)
     }
 }
 
@@ -317,12 +346,15 @@ impl App {
             panel_ratio: DEFAULT_PANEL_RATIO,
             panel_split: None,
             panel_edge: PanelEdge::Idle,
+            panel_collapsed: false,
             snapshots: Vec::new(),
         }
     }
 
     /// Move the detail panel's edge to screen column `x` (a mouse drag). The
     /// graph keeps the columns left of `x`, clamped so both sides stay usable.
+    /// Dragging so close to the right that the panel would keep under half its
+    /// minimum collapses it to the rail; dragging back out expands it again.
     /// No-op while the panel is closed.
     pub fn drag_panel_edge(&mut self, x: u16) {
         let Some(split) = self.panel_split else {
@@ -332,8 +364,13 @@ impl App {
         if width == 0 {
             return;
         }
-        let wanted = f32::from(x.saturating_sub(split.area.x)) / f32::from(width);
-        let graph = PanelSplit::graph_width(width, wanted);
+        let graph_cols = x.saturating_sub(split.area.x).min(width);
+        if width - graph_cols < MIN_PANEL_COLS / 2 {
+            self.panel_collapsed = true;
+            return;
+        }
+        self.panel_collapsed = false;
+        let graph = PanelSplit::graph_width(width, f32::from(graph_cols) / f32::from(width));
         self.panel_ratio = f32::from(graph) / f32::from(width);
     }
 
@@ -342,6 +379,14 @@ impl App {
     pub fn with_transparent_background(mut self) -> Self {
         self.flow.theme = rataflow::Theme::Custom(graph::palette(true));
         self
+    }
+
+    /// Collapse the detail panel to its rail, or expand it back, keeping the
+    /// selection. The selected node re-centers in the resized graph.
+    pub fn toggle_panel(&mut self) {
+        self.panel_collapsed = !self.panel_collapsed;
+        self.panel_edge = PanelEdge::Idle;
+        self.pending_center = self.selected_agent_id();
     }
 
     /// Derive the emergent transport state for display (status badge + scrubber

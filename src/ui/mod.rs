@@ -23,7 +23,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Sparkline, SparklineBar};
 
 use crate::state::session::LogKind;
-use crate::state::{App, Camera, Mode, PanelEdge, PanelSplit, Transport, graph};
+use crate::state::{App, Camera, Mode, PANEL_RAIL_COLS, PanelEdge, PanelSplit, Transport, graph};
 
 /// Render the entire UI for one frame.
 ///
@@ -65,14 +65,23 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // When an agent is selected, split the canvas for the detail panel: the
     // graph keeps two thirds by default, so the swarm stays readable around the
     // selected (click-centered) node, and the panel takes one third. Drag the
-    // panel's left edge to change it.
+    // panel's left edge to change it. Collapsed, the panel folds to a thin rail
+    // and the graph gets the rest, minimap included.
+    let collapsed = selected.is_some() && app.panel_collapsed;
     let (flow_area, panel_area) = if selected.is_some() {
-        let graph_w = PanelSplit::graph_width(canvas_area.width, app.panel_ratio);
+        let graph_w = if collapsed {
+            canvas_area.width.saturating_sub(PANEL_RAIL_COLS)
+        } else {
+            PanelSplit::graph_width(canvas_area.width, app.panel_ratio)
+        };
         let [left, right] = Layout::horizontal([Constraint::Length(graph_w), Constraint::Fill(1)])
             .areas(canvas_area);
         app.panel_split = Some(PanelSplit {
             area: canvas_area,
             edge_x: right.x,
+            collapsed,
+            // The " ▸ " title in the panel's top border, right after the corner.
+            button: (!collapsed && right.width > 4).then(|| Rect::new(right.x + 1, right.y, 3, 1)),
         });
         (left, Some(right))
     } else {
@@ -80,7 +89,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         (canvas_area, None)
     };
 
-    render_canvas(frame, flow_area, app, selected.is_none());
+    render_canvas(frame, flow_area, app, selected.is_none() || collapsed);
 
     // A user selection centers its node — resolved HERE, after the flow has
     // rendered into the (possibly just-narrowed) canvas, because `center_on`
@@ -93,7 +102,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     if let (Some(panel_area), Some(id)) = (panel_area, selected.as_ref()) {
-        panel::render(frame, panel_area, app, id);
+        if collapsed {
+            render_panel_rail(frame, panel_area, app);
+        } else {
+            panel::render(frame, panel_area, app, id);
+        }
         // The left border is a drag handle: light it up while it is hovered or
         // dragged, so the affordance shows where the mouse can grab.
         if app.panel_edge != PanelEdge::Idle {
@@ -116,6 +129,26 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if app.show_info {
         render_info(frame, area, app);
+    }
+}
+
+/// The collapsed detail panel: a thin bordered rail on the right with a `◂`
+/// expand hint. Clicking it (or `p`) expands the panel; its left border drags
+/// like the expanded panel's edge.
+fn render_panel_rail(frame: &mut Frame, area: Rect, app: &App) {
+    let palette = app.flow.theme.palette();
+    let bg = Style::default().bg(palette.surface);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(bg.fg(palette.muted))
+        .style(bg);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height > 0 {
+        frame.render_widget(
+            Paragraph::new(Line::from("◂").centered()).style(bg.fg(palette.subtle)),
+            Rect::new(inner.x, inner.y, inner.width, 1),
+        );
     }
 }
 
@@ -630,7 +663,7 @@ fn render_help(frame: &mut Frame, area: Rect, palette: &rataflow::Palette) {
         ]),
         Line::from(vec![
             Span::styled(" resize    ", key),
-            Span::styled("drag the panel's left edge", txt),
+            Span::styled("drag the panel's edge · p or ▸ collapse/expand", txt),
         ]),
         Line::from(vec![
             Span::styled(" timeline  ", key),
