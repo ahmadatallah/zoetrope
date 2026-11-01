@@ -15,7 +15,7 @@ pub(crate) mod nodes;
 pub(crate) mod panel;
 
 use crate::fact::{FactKind, Outcome};
-use rataflow::{Background, MiniMap, MiniMapPosition};
+use rataflow::{Background, MiniMap, MiniMapPosition, MiniMapStyle};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -23,7 +23,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Sparkline, SparklineBar};
 
 use crate::state::session::LogKind;
-use crate::state::{App, Camera, Mode, PanelEdge, PanelSplit, Transport};
+use crate::state::{App, Camera, Mode, PanelEdge, PanelSplit, Transport, graph};
 
 /// Render the entire UI for one frame.
 ///
@@ -707,12 +707,26 @@ fn render_canvas(frame: &mut Frame, area: Rect, app: &mut App, show_minimap: boo
     let now = app.timeline.now_reference();
     chips::render(&app.chips, &app.flow, &app.session, now, frame.buffer_mut());
     if show_minimap {
-        frame.render_widget(
-            MiniMap::new(&app.flow).position(MiniMapPosition::TopRight),
-            area,
-        );
+        let mut minimap = MiniMap::new(&app.flow).position(MiniMapPosition::TopRight);
+        if graph::is_transparent(&app.flow.theme) {
+            // With no surface behind it, the stock light viewport fill reads as
+            // a stray patch of background. Swap to a faint viewport with
+            // lighter node marks on top.
+            let palette = app.flow.theme.palette();
+            minimap = minimap.style(
+                MiniMapStyle::default()
+                    .with_viewport_color(palette.muted)
+                    .with_node_color(palette.subtle),
+            );
+        }
+        frame.render_widget(minimap, area);
     }
 }
+
+/// Dark text on the gold wordmark and the transport badge. Fixed to the stock
+/// dark canvas rather than read from the theme, because `--transparent` resets
+/// `canvas_bg` to the terminal default, which would put light text on gold.
+const BADGE_INK: Color = rataflow::Palette::DARK.canvas_bg;
 
 /// Render the bottom status bar: title, live/replay badge, pause indicator,
 /// agent & tool counts, and key hints.
@@ -748,13 +762,13 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
             " zoetrope ",
             Style::default()
                 .bg(palette.accent)
-                .fg(palette.canvas_bg)
+                .fg(BADGE_INK)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" ", bg),
         Span::styled(
             badge,
-            bg.fg(palette.canvas_bg)
+            bg.fg(BADGE_INK)
                 .bg(badge_color)
                 .add_modifier(Modifier::BOLD),
         ),
