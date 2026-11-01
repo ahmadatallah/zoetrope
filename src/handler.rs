@@ -9,11 +9,11 @@
 //! selection state matters (read during render), but events are still drained.
 
 use crossterm::event::{
-    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use rataflow::EventResponse;
 
-use crate::state::{App, Camera};
+use crate::state::{App, Camera, PanelEdge};
 
 /// Route one crossterm event. Returns `true` if the app should quit. Mutates
 /// `app` only — every key path is in-process state (no channel).
@@ -21,6 +21,11 @@ pub fn handle_event(event: &Event, app: &mut App) -> bool {
     match event {
         Event::Key(key) => handle_key(key, app),
         Event::Mouse(mouse) => {
+            // A press/drag on the detail panel's left edge resizes the split —
+            // intercepted first, for the same reason as the scrubber below.
+            if handle_panel_edge(mouse, app) {
+                return false;
+            }
             // A press/drag on the scrubber row seeks the playhead — intercept it
             // before the flow sees it (else it reads as a pane drag → pan).
             if let Some(bar) = app.scrubber_area
@@ -44,6 +49,46 @@ pub fn handle_event(event: &Event, app: &mut App) -> bool {
             // `From<crossterm::event::MouseEvent>` impl applies directly.
             let response = app.flow.handle_mouse_event(*mouse);
             process_flow_events(app, response.into_events());
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Resize the detail panel by dragging its left edge, the way terminal splits
+/// resize. Returns `true` when the event belonged to the edge, so the flow
+/// doesn't also read it as a pan. Hover only updates the highlight and is
+/// passed on.
+fn handle_panel_edge(mouse: &MouseEvent, app: &mut App) -> bool {
+    let on_edge = app
+        .panel_split
+        .is_some_and(|split| split.grabs(mouse.column, mouse.row));
+    let dragging = app.panel_edge == PanelEdge::Dragging;
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) if on_edge => {
+            app.panel_edge = PanelEdge::Dragging;
+            true
+        }
+        MouseEventKind::Drag(MouseButton::Left) if dragging => {
+            app.drag_panel_edge(mouse.column);
+            true
+        }
+        MouseEventKind::Up(MouseButton::Left) if dragging => {
+            app.panel_edge = if on_edge {
+                PanelEdge::Hover
+            } else {
+                PanelEdge::Idle
+            };
+            // Keep the selected node in view in the resized graph strip.
+            app.pending_center = app.selected_agent_id();
+            true
+        }
+        MouseEventKind::Moved if !dragging => {
+            app.panel_edge = if on_edge {
+                PanelEdge::Hover
+            } else {
+                PanelEdge::Idle
+            };
             false
         }
         _ => false,
@@ -252,8 +297,7 @@ pub fn process_flow_events(app: &mut App, events: impl Iterator<Item = rataflow:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::Mode;
-    use crossterm::event::MouseEvent;
+    use crate::state::{Mode, PanelSplit};
     use rataflow::FlowEvent;
 
     /// An App with a 20-column scrubber at (x=2, rows 5..8) over a 4-item replay.
@@ -296,6 +340,68 @@ mod tests {
             row,
             modifiers: KeyModifiers::NONE,
         })
+    }
+
+    /// An app whose detail panel was last drawn splitting columns 0..100 at
+    /// column 30 (the default 30/70).
+    fn panel_app() -> App {
+        let mut app = App::new("s".into(), Mode::Live);
+        app.panel_split = Some(PanelSplit {
+            area: ratatui::layout::Rect::new(0, 0, 100, 20),
+            edge_x: 30,
+        });
+        app
+    }
+
+    #[test]
+    fn dragging_the_panel_edge_resizes_the_split() {
+        let mut app = panel_app();
+        let left = MouseButton::Left;
+        handle_event(&mouse(MouseEventKind::Down(left), 30, 5), &mut app);
+        assert_eq!(app.panel_edge, PanelEdge::Dragging);
+
+        handle_event(&mouse(MouseEventKind::Drag(left), 50, 5), &mut app);
+        assert!((app.panel_ratio - 0.5).abs() < 1e-6, "{}", app.panel_ratio);
+
+        // Clamped so the graph and the panel both stay usable.
+        handle_event(&mouse(MouseEventKind::Drag(left), 2, 5), &mut app);
+        assert!((app.panel_ratio - 0.12).abs() < 1e-6, "{}", app.panel_ratio);
+        handle_event(&mouse(MouseEventKind::Drag(left), 99, 5), &mut app);
+        assert!((app.panel_ratio - 0.68).abs() < 1e-6, "{}", app.panel_ratio);
+
+        handle_event(&mouse(MouseEventKind::Up(left), 99, 5), &mut app);
+        assert_eq!(app.panel_edge, PanelEdge::Idle);
+        // Later drags no longer resize.
+        handle_event(&mouse(MouseEventKind::Drag(left), 50, 5), &mut app);
+        assert!((app.panel_ratio - 0.68).abs() < 1e-6);
+    }
+
+    #[test]
+    fn panel_edge_grab_zone_is_the_border_and_the_column_before_it() {
+        let left = MouseButton::Left;
+        for column in [29, 30] {
+            let mut app = panel_app();
+            handle_event(&mouse(MouseEventKind::Down(left), column, 5), &mut app);
+            assert_eq!(app.panel_edge, PanelEdge::Dragging, "column {column}");
+        }
+        // Off the edge, below the split, or with the panel closed: not grabbed.
+        for (column, row) in [(28, 5), (31, 5), (30, 20)] {
+            let mut app = panel_app();
+            handle_event(&mouse(MouseEventKind::Down(left), column, row), &mut app);
+            assert_eq!(app.panel_edge, PanelEdge::Idle, "({column}, {row})");
+        }
+        let mut app = App::new("s".into(), Mode::Live);
+        handle_event(&mouse(MouseEventKind::Down(left), 30, 5), &mut app);
+        assert_eq!(app.panel_edge, PanelEdge::Idle);
+    }
+
+    #[test]
+    fn hovering_the_panel_edge_highlights_it() {
+        let mut app = panel_app();
+        handle_event(&mouse(MouseEventKind::Moved, 30, 5), &mut app);
+        assert_eq!(app.panel_edge, PanelEdge::Hover);
+        handle_event(&mouse(MouseEventKind::Moved, 60, 5), &mut app);
+        assert_eq!(app.panel_edge, PanelEdge::Idle);
     }
 
     #[test]

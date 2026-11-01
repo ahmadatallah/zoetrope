@@ -23,7 +23,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Sparkline, SparklineBar};
 
 use crate::state::session::LogKind;
-use crate::state::{App, Camera, Mode, Transport};
+use crate::state::{App, Camera, Mode, PanelEdge, PanelSplit, Transport};
 
 /// Render the entire UI for one frame.
 ///
@@ -62,15 +62,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // the canvas render (borrow split: companions take &Flow, Widget is &mut).
     let selected = app.selected_agent_id();
 
-    // When an agent is selected, split the canvas 30/70 for the detail panel —
-    // the panel is what you're reading; the canvas only keeps the selected
-    // node (click-centered) in view for orientation.
+    // When an agent is selected, split the canvas for the detail panel (30/70
+    // by default; drag the panel's left edge to change it) — the panel is what
+    // you're reading; the canvas only keeps the selected node (click-centered)
+    // in view for orientation.
     let (flow_area, panel_area) = if selected.is_some() {
-        let [left, right] =
-            Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
-                .areas(canvas_area);
+        let graph_w = PanelSplit::graph_width(canvas_area.width, app.panel_ratio);
+        let [left, right] = Layout::horizontal([Constraint::Length(graph_w), Constraint::Fill(1)])
+            .areas(canvas_area);
+        app.panel_split = Some(PanelSplit {
+            area: canvas_area,
+            edge_x: right.x,
+        });
         (left, Some(right))
     } else {
+        app.panel_split = None;
         (canvas_area, None)
     };
 
@@ -88,6 +94,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     if let (Some(panel_area), Some(id)) = (panel_area, selected.as_ref()) {
         panel::render(frame, panel_area, app, id);
+        // The left border is a drag handle: light it up while it is hovered or
+        // dragged, so the affordance shows where the mouse can grab.
+        if app.panel_edge != PanelEdge::Idle {
+            let accent = app.flow.theme.palette().accent;
+            let buf = frame.buffer_mut();
+            for y in panel_area.top()..panel_area.bottom() {
+                buf[(panel_area.x, y)].set_fg(accent);
+            }
+        }
     }
 
     if let Some(panel) = timeline_area {
@@ -612,6 +627,10 @@ fn render_help(frame: &mut Frame, area: Rect, palette: &rataflow::Palette) {
         Line::from(vec![
             Span::styled(" panel     ", key),
             Span::styled("j/k · pgup/pgdn scroll · esc close", txt),
+        ]),
+        Line::from(vec![
+            Span::styled(" resize    ", key),
+            Span::styled("drag the panel's left edge", txt),
         ]),
         Line::from(vec![
             Span::styled(" timeline  ", key),

@@ -223,9 +223,66 @@ pub struct App {
     /// costs ONE seek (a backward seek rebuilds the whole model), not one per
     /// mouse event.
     pub pending_seek: Option<f64>,
+    /// Share of the canvas width the graph keeps while the detail panel is
+    /// open (0–1); the panel takes the rest. Dragging the panel's left edge
+    /// changes it. A layout preference, so it survives session resets.
+    pub panel_ratio: f32,
+    /// Where the graph/panel split was drawn last frame, so the input handler
+    /// can hit-test the panel's edge. `None` while the panel is closed.
+    pub panel_split: Option<PanelSplit>,
+    /// Mouse state of the panel's left edge (hovered, dragged).
+    pub panel_edge: PanelEdge,
     /// Ladder of folded-model snapshots, ascending by `folded`, used to start a
     /// backward seek near its target instead of re-folding from item zero.
     snapshots: Vec<Snapshot>,
+}
+
+/// The graph's default share of the canvas while the detail panel is open.
+pub const DEFAULT_PANEL_RATIO: f32 = 0.30;
+/// Narrowest the graph strip may be dragged, in columns.
+const MIN_GRAPH_COLS: u16 = 12;
+/// Narrowest the detail panel may be dragged, in columns.
+const MIN_PANEL_COLS: u16 = 32;
+
+/// The graph/detail-panel split as drawn, for resizing it with the mouse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PanelSplit {
+    /// The whole area being split: graph strip on the left, panel on the right.
+    pub area: ratatui::layout::Rect,
+    /// Screen column of the panel's left border, the drag handle.
+    pub edge_x: u16,
+}
+
+impl PanelSplit {
+    /// Graph width for `ratio` of `width` columns, clamped so the graph and the
+    /// panel both stay usable. A canvas too narrow for both minimums takes the
+    /// ratio as is.
+    pub fn graph_width(width: u16, ratio: f32) -> u16 {
+        let want = (f32::from(width) * ratio.clamp(0.0, 1.0)).round() as u16;
+        if width < MIN_GRAPH_COLS + MIN_PANEL_COLS {
+            return want.min(width);
+        }
+        want.clamp(MIN_GRAPH_COLS, width - MIN_PANEL_COLS)
+    }
+
+    /// Whether screen cell (`column`, `row`) grabs the edge: the panel's border
+    /// column or the graph column just left of it, so it is easy to hit.
+    pub fn grabs(&self, column: u16, row: u16) -> bool {
+        let rows = self.area.y..self.area.y + self.area.height;
+        rows.contains(&row) && column + 1 >= self.edge_x && column <= self.edge_x
+    }
+}
+
+/// Mouse state of the detail panel's left edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PanelEdge {
+    /// Not under the mouse.
+    #[default]
+    Idle,
+    /// The mouse is over it: drawn highlighted, ready to drag.
+    Hover,
+    /// Being dragged: the split follows the mouse.
+    Dragging,
 }
 
 impl App {
@@ -256,8 +313,27 @@ impl App {
             show_info: false,
             pending_center: None,
             pending_seek: None,
+            panel_ratio: DEFAULT_PANEL_RATIO,
+            panel_split: None,
+            panel_edge: PanelEdge::Idle,
             snapshots: Vec::new(),
         }
+    }
+
+    /// Move the detail panel's edge to screen column `x` (a mouse drag). The
+    /// graph keeps the columns left of `x`, clamped so both sides stay usable.
+    /// No-op while the panel is closed.
+    pub fn drag_panel_edge(&mut self, x: u16) {
+        let Some(split) = self.panel_split else {
+            return;
+        };
+        let width = split.area.width;
+        if width == 0 {
+            return;
+        }
+        let wanted = f32::from(x.saturating_sub(split.area.x)) / f32::from(width);
+        let graph = PanelSplit::graph_width(width, wanted);
+        self.panel_ratio = f32::from(graph) / f32::from(width);
     }
 
     /// Derive the emergent transport state for display (status badge + scrubber
@@ -1052,6 +1128,26 @@ mod tests {
             app.session.agent("newsub").is_some(),
             "new-session subagent must be present after auto-switch"
         );
+    }
+
+    #[test]
+    fn panel_graph_width_keeps_both_sides_usable() {
+        assert_eq!(PanelSplit::graph_width(100, DEFAULT_PANEL_RATIO), 30);
+        assert_eq!(PanelSplit::graph_width(100, 0.0), MIN_GRAPH_COLS);
+        assert_eq!(PanelSplit::graph_width(100, 1.0), 100 - MIN_PANEL_COLS);
+        // Too narrow for both minimums: the ratio as is.
+        assert_eq!(PanelSplit::graph_width(40, 0.5), 20);
+        assert_eq!(PanelSplit::graph_width(0, 0.5), 0);
+    }
+
+    #[test]
+    fn panel_ratio_survives_session_reset() {
+        let mut app = App::new("OLD".into(), Mode::Live);
+        app.panel_ratio = 0.5;
+        app.handle_ui_event(UiEvent::SessionReset {
+            session_id: "NEW".into(),
+        });
+        assert!((app.panel_ratio - 0.5).abs() < 1e-6);
     }
 
     #[test]
