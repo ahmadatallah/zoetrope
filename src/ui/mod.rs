@@ -80,7 +80,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             area: canvas_area,
             edge_x: right.x,
             collapsed,
-            // The " p ❯ " title in the panel's top border, right after the corner.
+            // The " p › " title in the panel's top border, right after the corner.
             button: (!collapsed && right.width > 6).then(|| Rect::new(right.x + 1, right.y, 5, 1)),
         });
         (left, Some(right))
@@ -133,7 +133,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 /// The collapsed detail panel: a thin bordered rail on the right with a bold
-/// `❮` expand chevron and its key, `p`, under it. Clicking it (or `p`)
+/// `‹` expand chevron and its key, `p`, under it. Clicking it (or `p`)
 /// expands the panel; its left border drags like the expanded panel's edge.
 fn render_panel_rail(frame: &mut Frame, area: Rect, app: &App) {
     let palette = app.flow.theme.palette();
@@ -146,7 +146,7 @@ fn render_panel_rail(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(block, area);
     let glyph = bg.fg(palette.text).add_modifier(Modifier::BOLD);
     let rows = [
-        Span::styled("❮", glyph),
+        Span::styled("‹", glyph),
         Span::styled("p", bg.fg(palette.subtle)),
     ];
     for (dy, span) in (0..inner.height).zip(rows) {
@@ -668,7 +668,7 @@ fn render_help(frame: &mut Frame, area: Rect, palette: &rataflow::Palette) {
         ]),
         Line::from(vec![
             Span::styled(" resize    ", key),
-            Span::styled("drag the panel's edge · p or ❯ collapse/expand", txt),
+            Span::styled("drag the panel's edge · p or › collapse/expand", txt),
         ]),
         Line::from(vec![
             Span::styled(" timeline  ", key),
