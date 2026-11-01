@@ -81,12 +81,16 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, agent_id: &str) {
         .border_style(Style::default().fg(palette.muted).bg(palette.surface))
         .style(bg)
         .padding(Padding::horizontal(1))
-        // Collapse to the rail (`p`); its rect is hit-tested from
-        // `App::panel_split`, so keep it the first left-aligned title.
+        // Collapse to the rail: the key, then a bold heavy chevron. Its rect is
+        // hit-tested from `App::panel_split`, so keep it the first left-aligned
+        // title, 5 cells wide.
         .title_top(
-            Line::from(" ▸ ")
-                .left_aligned()
-                .style(bg.fg(palette.subtle)),
+            Line::from(vec![
+                Span::styled(" p ", bg.fg(palette.subtle)),
+                Span::styled("❯", bg.fg(palette.text).add_modifier(Modifier::BOLD)),
+                Span::styled(" ", bg),
+            ])
+            .left_aligned(),
         )
         // Affordance: the way out is visible, not tribal knowledge.
         .title_top(

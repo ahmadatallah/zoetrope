@@ -66,7 +66,7 @@ fn handle_panel_edge(mouse: &MouseEvent, app: &mut App) -> bool {
     let toggles = split.is_some_and(|s| s.on_button(column, row) || s.on_rail(column, row));
     let dragging = app.panel_edge == PanelEdge::Dragging;
     match mouse.kind {
-        // The `▸` button collapses the panel; a click on the rail expands it.
+        // The `p ❯` button collapses the panel; a click on the rail expands it.
         MouseEventKind::Down(MouseButton::Left) if toggles => {
             app.toggle_panel();
             true
@@ -366,7 +366,7 @@ mod tests {
             area: ratatui::layout::Rect::new(0, 0, 100, 20),
             edge_x: 30,
             collapsed: false,
-            button: Some(ratatui::layout::Rect::new(31, 0, 3, 1)),
+            button: Some(ratatui::layout::Rect::new(31, 0, 5, 1)),
         });
         app
     }
@@ -416,8 +416,9 @@ mod tests {
     fn collapse_button_and_rail_clicks_toggle_the_panel() {
         let left = MouseButton::Left;
         let mut app = panel_app();
-        // The " ▸ " title in the top border: columns 31..34 of row 0.
-        handle_event(&mouse(MouseEventKind::Down(left), 32, 0), &mut app);
+        // The " p ❯ " title in the top border: columns 31..36 of row 0; the
+        // chevron itself sits at 34.
+        handle_event(&mouse(MouseEventKind::Down(left), 34, 0), &mut app);
         assert!(app.panel_collapsed);
         // A click beside it is just the border.
         let mut other = panel_app();
