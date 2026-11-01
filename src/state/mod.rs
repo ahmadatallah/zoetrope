@@ -233,7 +233,7 @@ pub struct App {
     /// Mouse state of the panel's left edge (hovered, dragged).
     pub panel_edge: PanelEdge,
     /// Whether the detail panel is folded to a thin rail on the right, giving
-    /// the graph the width while keeping the selection (`p`, the `▸` button,
+    /// the graph the width while keeping the selection (`p`, the `p ❯` button,
     /// or dragging the edge to the right). Survives session resets.
     pub panel_collapsed: bool,
     /// Ladder of folded-model snapshots, ascending by `folded`, used to start a
@@ -261,7 +261,7 @@ pub struct PanelSplit {
     pub edge_x: u16,
     /// Whether the panel is drawn collapsed, as a rail from `edge_x` rightwards.
     pub collapsed: bool,
-    /// The `▸` collapse button in the expanded panel's top border.
+    /// The `p ❯` collapse button in the expanded panel's top border.
     pub button: Option<ratatui::layout::Rect>,
 }
 

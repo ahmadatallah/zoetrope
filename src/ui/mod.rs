@@ -80,8 +80,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             area: canvas_area,
             edge_x: right.x,
             collapsed,
-            // The " ▸ " title in the panel's top border, right after the corner.
-            button: (!collapsed && right.width > 4).then(|| Rect::new(right.x + 1, right.y, 3, 1)),
+            // The " p ❯ " title in the panel's top border, right after the corner.
+            button: (!collapsed && right.width > 6).then(|| Rect::new(right.x + 1, right.y, 5, 1)),
         });
         (left, Some(right))
     } else {
@@ -132,9 +132,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
-/// The collapsed detail panel: a thin bordered rail on the right with a `◂`
-/// expand hint. Clicking it (or `p`) expands the panel; its left border drags
-/// like the expanded panel's edge.
+/// The collapsed detail panel: a thin bordered rail on the right with a bold
+/// `❮` expand chevron and its key, `p`, under it. Clicking it (or `p`)
+/// expands the panel; its left border drags like the expanded panel's edge.
 fn render_panel_rail(frame: &mut Frame, area: Rect, app: &App) {
     let palette = app.flow.theme.palette();
     let bg = Style::default().bg(palette.surface);
@@ -144,10 +144,15 @@ fn render_panel_rail(frame: &mut Frame, area: Rect, app: &App) {
         .style(bg);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    if inner.height > 0 {
+    let glyph = bg.fg(palette.text).add_modifier(Modifier::BOLD);
+    let rows = [
+        Span::styled("❮", glyph),
+        Span::styled("p", bg.fg(palette.subtle)),
+    ];
+    for (dy, span) in (0..inner.height).zip(rows) {
         frame.render_widget(
-            Paragraph::new(Line::from("◂").centered()).style(bg.fg(palette.subtle)),
-            Rect::new(inner.x, inner.y, inner.width, 1),
+            Paragraph::new(Line::from(span).centered()),
+            Rect::new(inner.x, inner.y + dy, inner.width, 1),
         );
     }
 }
@@ -663,7 +668,7 @@ fn render_help(frame: &mut Frame, area: Rect, palette: &rataflow::Palette) {
         ]),
         Line::from(vec![
             Span::styled(" resize    ", key),
-            Span::styled("drag the panel's edge · p or ▸ collapse/expand", txt),
+            Span::styled("drag the panel's edge · p or ❯ collapse/expand", txt),
         ]),
         Line::from(vec![
             Span::styled(" timeline  ", key),
@@ -827,10 +832,15 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         "q quit · "
     };
-    let hints = if app.mode == Mode::Replay {
-        format!("{quit}? help · space pause")
+    let panel = if app.panel_split.is_some() {
+        "p panel · "
     } else {
-        format!("{quit}? help")
+        ""
+    };
+    let hints = if app.mode == Mode::Replay {
+        format!("{panel}{quit}? help · space pause")
+    } else {
+        format!("{panel}{quit}? help")
     };
 
     // Reserve the hint area in terminal CELLS, not bytes: the hints contain
