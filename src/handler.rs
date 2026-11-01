@@ -66,7 +66,7 @@ fn handle_panel_edge(mouse: &MouseEvent, app: &mut App) -> bool {
     let toggles = split.is_some_and(|s| s.on_button(column, row) || s.on_rail(column, row));
     let dragging = app.panel_edge == PanelEdge::Dragging;
     match mouse.kind {
-        // The `p ❯` button collapses the panel; a click on the rail expands it.
+        // The `p ›` button collapses the panel; a click on the rail expands it.
         MouseEventKind::Down(MouseButton::Left) if toggles => {
             app.toggle_panel();
             true
@@ -416,7 +416,7 @@ mod tests {
     fn collapse_button_and_rail_clicks_toggle_the_panel() {
         let left = MouseButton::Left;
         let mut app = panel_app();
-        // The " p ❯ " title in the top border: columns 31..36 of row 0; the
+        // The " p › " title in the top border: columns 31..36 of row 0; the
         // chevron itself sits at 34.
         handle_event(&mouse(MouseEventKind::Down(left), 34, 0), &mut app);
         assert!(app.panel_collapsed);
