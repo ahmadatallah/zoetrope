@@ -81,6 +81,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, agent_id: &str) {
         .border_style(Style::default().fg(palette.muted).bg(palette.surface))
         .style(bg)
         .padding(Padding::horizontal(1))
+        // Collapse to the rail (`p`); its rect is hit-tested from
+        // `App::panel_split`, so keep it the first left-aligned title.
+        .title_top(
+            Line::from(" ▸ ")
+                .left_aligned()
+                .style(bg.fg(palette.subtle)),
+        )
         // Affordance: the way out is visible, not tribal knowledge.
         .title_top(
             Line::from(" esc ✕ ")

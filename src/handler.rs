@@ -60,11 +60,17 @@ pub fn handle_event(event: &Event, app: &mut App) -> bool {
 /// doesn't also read it as a pan. Hover only updates the highlight and is
 /// passed on.
 fn handle_panel_edge(mouse: &MouseEvent, app: &mut App) -> bool {
-    let on_edge = app
-        .panel_split
-        .is_some_and(|split| split.grabs(mouse.column, mouse.row));
+    let (column, row) = (mouse.column, mouse.row);
+    let split = app.panel_split;
+    let on_edge = split.is_some_and(|s| s.grabs(column, row));
+    let toggles = split.is_some_and(|s| s.on_button(column, row) || s.on_rail(column, row));
     let dragging = app.panel_edge == PanelEdge::Dragging;
     match mouse.kind {
+        // The `▸` button collapses the panel; a click on the rail expands it.
+        MouseEventKind::Down(MouseButton::Left) if toggles => {
+            app.toggle_panel();
+            true
+        }
         MouseEventKind::Down(MouseButton::Left) if on_edge => {
             app.panel_edge = PanelEdge::Dragging;
             true
@@ -189,6 +195,15 @@ fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
             return false;
         }
 
+        // Collapse the detail panel to its rail, or expand it, keeping the
+        // selection. Only meaningful while an agent is selected.
+        KeyCode::Char('p') | KeyCode::Char('P') => {
+            if app.selected_agent_id().is_some() {
+                app.toggle_panel();
+            }
+            return false;
+        }
+
         // Help overlay.
         KeyCode::Char('?') => {
             app.show_help = !app.show_help;
@@ -268,7 +283,8 @@ const PAGE_SCROLL: i32 = 10;
 /// (so the key is consumed and not forwarded to the flow); `false` lets the key
 /// fall through to graph navigation when no panel is shown.
 fn scroll_detail(app: &mut App, delta: i32) -> bool {
-    if app.selected_agent_id().is_none() {
+    // A collapsed panel has nothing to scroll: `j`/`k` pan the graph instead.
+    if app.panel_collapsed || app.selected_agent_id().is_none() {
         return false;
     }
     // Scrolling up detaches the tail; scrolling down to the bottom re-attaches.
@@ -349,6 +365,8 @@ mod tests {
         app.panel_split = Some(PanelSplit {
             area: ratatui::layout::Rect::new(0, 0, 100, 20),
             edge_x: 30,
+            collapsed: false,
+            button: Some(ratatui::layout::Rect::new(31, 0, 3, 1)),
         });
         app
     }
@@ -366,14 +384,101 @@ mod tests {
         // Clamped so the graph and the panel both stay usable.
         handle_event(&mouse(MouseEventKind::Drag(left), 2, 5), &mut app);
         assert!((app.panel_ratio - 0.12).abs() < 1e-6, "{}", app.panel_ratio);
-        handle_event(&mouse(MouseEventKind::Drag(left), 99, 5), &mut app);
+        handle_event(&mouse(MouseEventKind::Drag(left), 75, 5), &mut app);
         assert!((app.panel_ratio - 0.68).abs() < 1e-6, "{}", app.panel_ratio);
 
-        handle_event(&mouse(MouseEventKind::Up(left), 99, 5), &mut app);
+        handle_event(&mouse(MouseEventKind::Up(left), 75, 5), &mut app);
         assert_eq!(app.panel_edge, PanelEdge::Idle);
         // Later drags no longer resize.
         handle_event(&mouse(MouseEventKind::Drag(left), 50, 5), &mut app);
         assert!((app.panel_ratio - 0.68).abs() < 1e-6);
+        assert!(!app.panel_collapsed);
+    }
+
+    #[test]
+    fn dragging_the_edge_to_the_right_collapses_and_back_expands() {
+        let mut app = panel_app();
+        let left = MouseButton::Left;
+        handle_event(&mouse(MouseEventKind::Down(left), 30, 5), &mut app);
+        handle_event(&mouse(MouseEventKind::Drag(left), 50, 5), &mut app);
+        // Under half the panel's minimum (16 columns) left: snaps to the rail,
+        // and the ratio to return to is kept.
+        handle_event(&mouse(MouseEventKind::Drag(left), 90, 5), &mut app);
+        assert!(app.panel_collapsed);
+        assert!((app.panel_ratio - 0.5).abs() < 1e-6, "{}", app.panel_ratio);
+        // Back out in the same drag: expands again, following the mouse.
+        handle_event(&mouse(MouseEventKind::Drag(left), 60, 5), &mut app);
+        assert!(!app.panel_collapsed);
+        assert!((app.panel_ratio - 0.6).abs() < 1e-6, "{}", app.panel_ratio);
+    }
+
+    #[test]
+    fn collapse_button_and_rail_clicks_toggle_the_panel() {
+        let left = MouseButton::Left;
+        let mut app = panel_app();
+        // The " ▸ " title in the top border: columns 31..34 of row 0.
+        handle_event(&mouse(MouseEventKind::Down(left), 32, 0), &mut app);
+        assert!(app.panel_collapsed);
+        // A click beside it is just the border.
+        let mut other = panel_app();
+        handle_event(&mouse(MouseEventKind::Down(left), 40, 0), &mut other);
+        assert!(!other.panel_collapsed);
+
+        // Collapsed: a 3-column rail at the right; a click right of its edge
+        // expands, while its edge still drags.
+        app.panel_split = Some(PanelSplit {
+            area: ratatui::layout::Rect::new(0, 0, 100, 20),
+            edge_x: 97,
+            collapsed: true,
+            button: None,
+        });
+        handle_event(&mouse(MouseEventKind::Down(left), 97, 5), &mut app);
+        assert_eq!(app.panel_edge, PanelEdge::Dragging);
+        assert!(app.panel_collapsed);
+        handle_event(&mouse(MouseEventKind::Up(left), 97, 5), &mut app);
+        handle_event(&mouse(MouseEventKind::Down(left), 98, 5), &mut app);
+        assert!(!app.panel_collapsed);
+    }
+
+    #[test]
+    fn p_collapses_the_panel_only_with_a_selection_and_frees_j_k() {
+        let p = Event::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+        let j = Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        let mut app = App::new("s".into(), Mode::Live);
+        handle_event(&p, &mut app);
+        assert!(!app.panel_collapsed, "no selection, nothing to collapse");
+
+        let node = rataflow::Node::new(
+            "a",
+            (0.0, 0.0),
+            (10.0, 5.0),
+            crate::ui::nodes::AgentNode {
+                title: "a".into(),
+                description: None,
+                status: crate::state::session::AgentStatus::Running,
+                tool_count: 0,
+                last_tool: None,
+                output_tokens: 0,
+                interactive: false,
+            },
+        );
+        app.flow.add_node(node).unwrap();
+        app.flow.select_node("a");
+        handle_event(&p, &mut app);
+        assert!(app.panel_collapsed);
+        assert_eq!(
+            app.pending_center.as_deref(),
+            Some("a"),
+            "re-centers the node"
+        );
+
+        // Collapsed, `j` no longer scrolls the (hidden) tool list.
+        handle_event(&j, &mut app);
+        assert_eq!(app.detail_scroll, 0);
+        handle_event(&p, &mut app);
+        assert!(!app.panel_collapsed);
+        handle_event(&j, &mut app);
+        assert_eq!(app.detail_scroll, 1);
     }
 
     #[test]
