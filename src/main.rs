@@ -10,13 +10,14 @@
 //! zoe <file> --follow       follow a file's live edge instead of replaying
 //! zoe <file> --speed N      playback speed multiplier (default 8.0)
 //! zoe --provider <name> ... force the transcript format instead of detecting it
-//! zoe --transparent ...     no canvas/card background; the terminal's shows through
+//! zoe --transparent ...     use the terminal's background instead of zoetrope's
 //! zoe inspect <file|id|dir> headless: print the session tree + info
 //! ```
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
+use ratatui::style::Color;
 use tokio::sync::mpsc;
 
 use zoetrope::provider::{Provider, ReadMode, Target, open};
@@ -40,7 +41,7 @@ pub enum Cli {
     /// start), a project dir (follow its live session), a session id, or
     /// `None` (the current project). `follow` starts at the live edge instead
     /// of replaying. `provider` forces the format instead of detecting it.
-    /// `transparent` paints no canvas or card background.
+    /// `transparent` uses the terminal's background instead of zoetrope's.
     View {
         target: Option<String>,
         follow: bool,
@@ -70,7 +71,7 @@ USAGE:
     zoe <file> --follow     follow a file's live edge instead of replaying
     zoe <file> --speed N    playback speed (default 8.0)
     zoe --provider <name>   force the format (claude, codex) instead of detecting it
-    zoe --transparent       no canvas or card background; the terminal's shows through
+    zoe --transparent       use the terminal's background instead of zoetrope's
     zoe inspect <file|id>   headless: print the session tree + info
     zoe --version           print the version and exit
 
@@ -246,6 +247,9 @@ async fn run_tui(cli: Cli) -> Result<()> {
         unreachable!("inspect handled in main");
     };
 
+    // Ask before the TUI takes over the terminal's input.
+    let backdrop = transparent.then(|| terminal_background().unwrap_or(Color::Reset));
+
     let target = match target {
         Some(t) => resolve_target(t)?,
         None => Target::Here(std::env::current_dir().context("resolving current directory")?),
@@ -287,10 +291,25 @@ async fn run_tui(cli: Cli) -> Result<()> {
     });
 
     let mut app = App::new(session_id, mode);
-    if transparent {
-        app = app.with_transparent_background();
+    if let Some(backdrop) = backdrop {
+        app = app.with_backdrop(backdrop);
     }
     tui::run(app, tail_tx, ui_rx).await
+}
+
+/// The terminal's background colour, asked of the terminal itself (OSC 11).
+///
+/// `--transparent` paints this explicitly rather than leaving cells at the
+/// terminal default: some terminals shade parts of a pane on their own (Rex
+/// keeps shading a zoomed split's unzoomed area), and default-coloured cells
+/// show that through as a seam. `None` when the terminal does not answer.
+fn terminal_background() -> Option<Color> {
+    let mut options = terminal_colorsaurus::QueryOptions::default();
+    options.timeout = std::time::Duration::from_millis(300);
+    let (r, g, b) = terminal_colorsaurus::background_color(options)
+        .ok()?
+        .scale_to_8bit();
+    Some(Color::Rgb(r, g, b))
 }
 
 /// What a positional argument means: an existing file is a session's file, an

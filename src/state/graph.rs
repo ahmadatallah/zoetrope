@@ -24,22 +24,24 @@ pub type AgentFlow = Flow<AgentNode, AgentEdge>;
 /// "failed". Every surface resolves from `flow.theme`, so this one palette
 /// brands the whole app.
 ///
-/// `transparent` drops the canvas and card fills (`canvas_bg`, `surface`) to
-/// [`Color::Reset`], so the terminal's own background shows through. Badges
-/// and bars that carry meaning keep their fills.
-pub fn palette(transparent: bool) -> Palette {
+/// `backdrop` replaces the canvas and card fills (`canvas_bg`, `surface`),
+/// so the graph sits on the terminal's own background instead of zoetrope's
+/// dark one (`zoe --transparent`). Pass the terminal's background colour, or
+/// [`Color::Reset`] when it is unknown. Badges and bars that carry meaning
+/// keep their fills.
+pub fn palette(backdrop: Option<Color>) -> Palette {
     let mut palette = Theme::Dark.palette();
     palette.accent = Color::Indexed(178);
-    if transparent {
-        palette.canvas_bg = Color::Reset;
-        palette.surface = Color::Reset;
+    if let Some(color) = backdrop {
+        palette.canvas_bg = color;
+        palette.surface = color;
     }
     palette
 }
 
-/// Whether `theme` is the transparent variant built by [`palette`].
+/// Whether `theme` was built by [`palette`] with a backdrop.
 pub fn is_transparent(theme: &Theme) -> bool {
-    theme.palette().canvas_bg == Color::Reset
+    theme.palette().canvas_bg != Theme::Dark.palette().canvas_bg
 }
 
 /// Build an empty, fully-configured `Flow` for zoetrope.
@@ -49,7 +51,7 @@ pub fn is_transparent(theme: &Theme) -> bool {
 /// default fit-view limit). Hidden source/target handles for a clean look.
 pub fn new_flow() -> AgentFlow {
     let mut flow = Flow::new()
-        .with_theme(Theme::Custom(palette(false)))
+        .with_theme(Theme::Custom(palette(None)))
         .with_deselect_on_pane_click(false)
         // We drive the camera on selection ourselves (a center-glide via
         // `pending_center`), so suppress the library's instant ensure-visible pan
@@ -271,20 +273,22 @@ mod tests {
     use crate::provider::claude::wire::SubagentMeta;
 
     #[test]
-    fn transparent_palette_drops_only_the_fills() {
-        let solid = palette(false);
-        let clear = palette(true);
+    fn backdrop_replaces_only_the_fills() {
+        let solid = palette(None);
         assert!(!is_transparent(&Theme::Custom(solid)));
-        assert!(is_transparent(&Theme::Custom(clear)));
-        assert_eq!(clear.canvas_bg, Color::Reset);
-        assert_eq!(clear.surface, Color::Reset);
-        // Everything that carries meaning is untouched.
-        assert_eq!(clear.accent, solid.accent);
-        assert_eq!(clear.success, solid.success);
-        assert_eq!(clear.error, solid.error);
-        assert_eq!(clear.text, solid.text);
-        assert_eq!(clear.muted, solid.muted);
-        assert_eq!(clear.subtle, solid.subtle);
+        for backdrop in [Color::Reset, Color::Rgb(48, 48, 48)] {
+            let clear = palette(Some(backdrop));
+            assert!(is_transparent(&Theme::Custom(clear)), "{backdrop:?}");
+            assert_eq!(clear.canvas_bg, backdrop);
+            assert_eq!(clear.surface, backdrop);
+            // Everything that carries meaning is untouched.
+            assert_eq!(clear.accent, solid.accent);
+            assert_eq!(clear.success, solid.success);
+            assert_eq!(clear.error, solid.error);
+            assert_eq!(clear.text, solid.text);
+            assert_eq!(clear.muted, solid.muted);
+            assert_eq!(clear.subtle, solid.subtle);
+        }
     }
 
     /// A model with main + one direct subagent (running).
