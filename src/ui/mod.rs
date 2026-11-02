@@ -15,7 +15,7 @@ pub(crate) mod nodes;
 pub(crate) mod panel;
 
 use crate::fact::{FactKind, Outcome};
-use rataflow::{Background, MiniMap, MiniMapPosition};
+use rataflow::{Background, MiniMap, MiniMapPosition, MiniMapStyle};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -23,7 +23,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Sparkline, SparklineBar};
 
 use crate::state::session::LogKind;
-use crate::state::{App, Camera, Mode, Transport};
+use crate::state::{App, Camera, Mode, PANEL_RAIL_COLS, PanelEdge, PanelSplit, Transport, graph};
 
 /// Render the entire UI for one frame.
 ///
@@ -62,19 +62,34 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // the canvas render (borrow split: companions take &Flow, Widget is &mut).
     let selected = app.selected_agent_id();
 
-    // When an agent is selected, split the canvas 30/70 for the detail panel —
-    // the panel is what you're reading; the canvas only keeps the selected
-    // node (click-centered) in view for orientation.
+    // When an agent is selected, split the canvas for the detail panel: the
+    // graph keeps two thirds by default, so the swarm stays readable around the
+    // selected (click-centered) node, and the panel takes one third. Drag the
+    // panel's left edge to change it. Collapsed, the panel folds to a thin rail
+    // and the graph gets the rest, minimap included.
+    let collapsed = selected.is_some() && app.panel_collapsed;
     let (flow_area, panel_area) = if selected.is_some() {
-        let [left, right] =
-            Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
-                .areas(canvas_area);
+        let graph_w = if collapsed {
+            canvas_area.width.saturating_sub(PANEL_RAIL_COLS)
+        } else {
+            PanelSplit::graph_width(canvas_area.width, app.panel_ratio)
+        };
+        let [left, right] = Layout::horizontal([Constraint::Length(graph_w), Constraint::Fill(1)])
+            .areas(canvas_area);
+        app.panel_split = Some(PanelSplit {
+            area: canvas_area,
+            edge_x: right.x,
+            collapsed,
+            // The " p › " title in the panel's top border, right after the corner.
+            button: (!collapsed && right.width > 6).then(|| Rect::new(right.x + 1, right.y, 5, 1)),
+        });
         (left, Some(right))
     } else {
+        app.panel_split = None;
         (canvas_area, None)
     };
 
-    render_canvas(frame, flow_area, app, selected.is_none());
+    render_canvas(frame, flow_area, app, selected.is_none() || collapsed);
 
     // A user selection centers its node — resolved HERE, after the flow has
     // rendered into the (possibly just-narrowed) canvas, because `center_on`
@@ -87,7 +102,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     if let (Some(panel_area), Some(id)) = (panel_area, selected.as_ref()) {
-        panel::render(frame, panel_area, app, id);
+        if collapsed {
+            render_panel_rail(frame, panel_area, app);
+        } else {
+            panel::render(frame, panel_area, app, id);
+        }
+        // The left border is a drag handle: light it up while it is hovered or
+        // dragged, so the affordance shows where the mouse can grab.
+        if app.panel_edge != PanelEdge::Idle {
+            let accent = app.flow.theme.palette().accent;
+            let buf = frame.buffer_mut();
+            for y in panel_area.top()..panel_area.bottom() {
+                buf[(panel_area.x, y)].set_fg(accent);
+            }
+        }
     }
 
     if let Some(panel) = timeline_area {
@@ -101,6 +129,31 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if app.show_info {
         render_info(frame, area, app);
+    }
+}
+
+/// The collapsed detail panel: a thin bordered rail on the right with a bold
+/// `‹` expand chevron and its key, `p`, under it. Clicking it (or `p`)
+/// expands the panel; its left border drags like the expanded panel's edge.
+fn render_panel_rail(frame: &mut Frame, area: Rect, app: &App) {
+    let palette = app.flow.theme.palette();
+    let bg = Style::default().bg(palette.surface);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(bg.fg(palette.muted))
+        .style(bg);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let glyph = bg.fg(palette.text).add_modifier(Modifier::BOLD);
+    let rows = [
+        Span::styled("‹", glyph),
+        Span::styled("p", bg.fg(palette.subtle)),
+    ];
+    for (dy, span) in (0..inner.height).zip(rows) {
+        frame.render_widget(
+            Paragraph::new(Line::from(span).centered()),
+            Rect::new(inner.x, inner.y + dy, inner.width, 1),
+        );
     }
 }
 
@@ -614,6 +667,10 @@ fn render_help(frame: &mut Frame, area: Rect, palette: &rataflow::Palette) {
             Span::styled("j/k · pgup/pgdn scroll · esc close", txt),
         ]),
         Line::from(vec![
+            Span::styled(" resize    ", key),
+            Span::styled("drag the panel's edge · p or › collapse/expand", txt),
+        ]),
+        Line::from(vec![
             Span::styled(" timeline  ", key),
             Span::styled("[ ] step prompts ", txt),
             Span::styled("◆", bg.fg(palette.accent)),
@@ -688,12 +745,26 @@ fn render_canvas(frame: &mut Frame, area: Rect, app: &mut App, show_minimap: boo
     let now = app.timeline.now_reference();
     chips::render(&app.chips, &app.flow, &app.session, now, frame.buffer_mut());
     if show_minimap {
-        frame.render_widget(
-            MiniMap::new(&app.flow).position(MiniMapPosition::TopRight),
-            area,
-        );
+        let mut minimap = MiniMap::new(&app.flow).position(MiniMapPosition::TopRight);
+        if graph::is_transparent(&app.flow.theme) {
+            // With no surface behind it, the stock light viewport fill reads as
+            // a stray patch of background. Swap to a faint viewport with
+            // lighter node marks on top.
+            let palette = app.flow.theme.palette();
+            minimap = minimap.style(
+                MiniMapStyle::default()
+                    .with_viewport_color(palette.muted)
+                    .with_node_color(palette.subtle),
+            );
+        }
+        frame.render_widget(minimap, area);
     }
 }
+
+/// Dark text on the gold wordmark and the transport badge. Fixed to the stock
+/// dark canvas rather than read from the theme, because `--transparent` resets
+/// `canvas_bg` to the terminal default, which would put light text on gold.
+const BADGE_INK: Color = rataflow::Palette::DARK.canvas_bg;
 
 /// Render the bottom status bar: title, live/replay badge, pause indicator,
 /// agent & tool counts, and key hints.
@@ -729,13 +800,13 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
             " zoetrope ",
             Style::default()
                 .bg(palette.accent)
-                .fg(palette.canvas_bg)
+                .fg(BADGE_INK)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" ", bg),
         Span::styled(
             badge,
-            bg.fg(palette.canvas_bg)
+            bg.fg(BADGE_INK)
                 .bg(badge_color)
                 .add_modifier(Modifier::BOLD),
         ),
@@ -775,10 +846,15 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         "q quit · "
     };
-    let hints = if app.mode == Mode::Replay {
-        format!("{quit}? help · space pause")
+    let panel = if app.panel_split.is_some() {
+        "p panel · "
     } else {
-        format!("{quit}? help")
+        ""
+    };
+    let hints = if app.mode == Mode::Replay {
+        format!("{panel}{quit}? help · space pause")
+    } else {
+        format!("{panel}{quit}? help")
     };
 
     // Reserve the hint area in terminal CELLS, not bytes: the hints contain

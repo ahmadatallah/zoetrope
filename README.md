@@ -110,6 +110,7 @@ zoe <id>                     # replay a session by id, or a unique prefix of one
 zoe <file.jsonl> --follow    # open a recording at its live edge
 zoe <file.jsonl> --speed N   # playback speed (default 8.0)
 zoe --provider codex ...     # force the format instead of detecting it from the file
+zoe --transparent ...        # no canvas or card background: the terminal's own shows through
 zoe inspect <file|id>        # print the session tree and exit (no TUI)
 ```
 
@@ -145,6 +146,8 @@ session from disk, or drop a transcript on the page. It stays local there too.
 **Inspection**
 - Click any agent for its provenance: the prompt that spawned it, the reasoning
   around it, its model, and every tool call it made with timings
+- Drag the detail panel's left edge to resize it, like a terminal split; `p`,
+  the `›` in its corner, or dragging it to the right edge collapses it to a rail
 - Session info overlay: mode, permissions, queued ops, file edits, last prompt
 - `zoe inspect` prints the whole tree headlessly, so it runs anywhere without a TTY
 

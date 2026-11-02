@@ -223,9 +223,96 @@ pub struct App {
     /// costs ONE seek (a backward seek rebuilds the whole model), not one per
     /// mouse event.
     pub pending_seek: Option<f64>,
+    /// Share of the canvas width the graph keeps while the detail panel is
+    /// open (0–1); the panel takes the rest. Dragging the panel's left edge
+    /// changes it. A layout preference, so it survives session resets.
+    pub panel_ratio: f32,
+    /// Where the graph/panel split was drawn last frame, so the input handler
+    /// can hit-test the panel's edge. `None` while the panel is closed.
+    pub panel_split: Option<PanelSplit>,
+    /// Mouse state of the panel's left edge (hovered, dragged).
+    pub panel_edge: PanelEdge,
+    /// Whether the detail panel is folded to a thin rail on the right, giving
+    /// the graph the width while keeping the selection (`p`, the `p ›` button,
+    /// or dragging the edge to the right). Survives session resets.
+    pub panel_collapsed: bool,
     /// Ladder of folded-model snapshots, ascending by `folded`, used to start a
     /// backward seek near its target instead of re-folding from item zero.
     snapshots: Vec<Snapshot>,
+}
+
+/// The graph's default share of the canvas while the detail panel is open:
+/// two thirds, leaving the panel one third.
+pub const DEFAULT_PANEL_RATIO: f32 = 2.0 / 3.0;
+/// Narrowest the graph strip may be dragged, in columns.
+const MIN_GRAPH_COLS: u16 = 12;
+/// Narrowest the detail panel may be dragged, in columns.
+const MIN_PANEL_COLS: u16 = 32;
+/// Width of the collapsed panel's rail, in columns (border, glyph, border).
+pub const PANEL_RAIL_COLS: u16 = 3;
+
+/// The graph/detail-panel split as drawn, for resizing and collapsing it with
+/// the mouse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PanelSplit {
+    /// The whole area being split: graph strip on the left, panel on the right.
+    pub area: ratatui::layout::Rect,
+    /// Screen column of the panel's (or the rail's) left border, the drag handle.
+    pub edge_x: u16,
+    /// Whether the panel is drawn collapsed, as a rail from `edge_x` rightwards.
+    pub collapsed: bool,
+    /// The `p ›` collapse button in the expanded panel's top border.
+    pub button: Option<ratatui::layout::Rect>,
+}
+
+impl PanelSplit {
+    /// Graph width for `ratio` of `width` columns, clamped so the graph and the
+    /// panel both stay usable. A canvas too narrow for both minimums takes the
+    /// ratio as is.
+    pub fn graph_width(width: u16, ratio: f32) -> u16 {
+        let want = (f32::from(width) * ratio.clamp(0.0, 1.0)).round() as u16;
+        if width < MIN_GRAPH_COLS + MIN_PANEL_COLS {
+            return want.min(width);
+        }
+        want.clamp(MIN_GRAPH_COLS, width - MIN_PANEL_COLS)
+    }
+
+    /// Whether screen cell (`column`, `row`) grabs the edge: the panel's border
+    /// column or the graph column just left of it, so it is easy to hit.
+    pub fn grabs(&self, column: u16, row: u16) -> bool {
+        self.has_row(row) && column + 1 >= self.edge_x && column <= self.edge_x
+    }
+
+    /// Whether (`column`, `row`) is on the collapse button.
+    pub fn on_button(&self, column: u16, row: u16) -> bool {
+        self.button
+            .is_some_and(|b| b.contains(ratatui::layout::Position::new(column, row)))
+    }
+
+    /// Whether (`column`, `row`) is on the collapsed rail, right of its edge: a
+    /// click there expands the panel (the edge itself still drags).
+    pub fn on_rail(&self, column: u16, row: u16) -> bool {
+        self.collapsed
+            && self.has_row(row)
+            && column > self.edge_x
+            && column < self.area.x + self.area.width
+    }
+
+    fn has_row(&self, row: u16) -> bool {
+        (self.area.y..self.area.y + self.area.height).contains(&row)
+    }
+}
+
+/// Mouse state of the detail panel's left edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PanelEdge {
+    /// Not under the mouse.
+    #[default]
+    Idle,
+    /// The mouse is over it: drawn highlighted, ready to drag.
+    Hover,
+    /// Being dragged: the split follows the mouse.
+    Dragging,
 }
 
 impl App {
@@ -256,8 +343,50 @@ impl App {
             show_info: false,
             pending_center: None,
             pending_seek: None,
+            panel_ratio: DEFAULT_PANEL_RATIO,
+            panel_split: None,
+            panel_edge: PanelEdge::Idle,
+            panel_collapsed: false,
             snapshots: Vec::new(),
         }
+    }
+
+    /// Move the detail panel's edge to screen column `x` (a mouse drag). The
+    /// graph keeps the columns left of `x`, clamped so both sides stay usable.
+    /// Dragging so close to the right that the panel would keep under half its
+    /// minimum collapses it to the rail; dragging back out expands it again.
+    /// No-op while the panel is closed.
+    pub fn drag_panel_edge(&mut self, x: u16) {
+        let Some(split) = self.panel_split else {
+            return;
+        };
+        let width = split.area.width;
+        if width == 0 {
+            return;
+        }
+        let graph_cols = x.saturating_sub(split.area.x).min(width);
+        if width - graph_cols < MIN_PANEL_COLS / 2 {
+            self.panel_collapsed = true;
+            return;
+        }
+        self.panel_collapsed = false;
+        let graph = PanelSplit::graph_width(width, f32::from(graph_cols) / f32::from(width));
+        self.panel_ratio = f32::from(graph) / f32::from(width);
+    }
+
+    /// Paint no canvas or card background, so the terminal's own background
+    /// shows through (`zoe --transparent`). Survives session resets.
+    pub fn with_transparent_background(mut self) -> Self {
+        self.flow.theme = rataflow::Theme::Custom(graph::palette(true));
+        self
+    }
+
+    /// Collapse the detail panel to its rail, or expand it back, keeping the
+    /// selection. The selected node re-centers in the resized graph.
+    pub fn toggle_panel(&mut self) {
+        self.panel_collapsed = !self.panel_collapsed;
+        self.panel_edge = PanelEdge::Idle;
+        self.pending_center = self.selected_agent_id();
     }
 
     /// Derive the emergent transport state for display (status badge + scrubber
@@ -467,7 +596,10 @@ impl App {
                 let genuine = !self.is_current(&session_id) || self.flow.nodes().count() > 0;
                 self.current_session_id = session_id.clone();
                 self.session = SessionModel::new(session_id);
+                // Fresh graph, same look (e.g. `--transparent`).
+                let theme = self.flow.theme;
                 self.flow = graph::new_flow();
+                self.flow.theme = theme;
                 // A different session (or a truncated one) shares nothing with
                 // the rungs we hold, and a fresh `Timeline` restarts the
                 // generation counter — so they cannot be told apart by it.
@@ -1052,6 +1184,49 @@ mod tests {
             app.session.agent("newsub").is_some(),
             "new-session subagent must be present after auto-switch"
         );
+    }
+
+    #[test]
+    fn panel_graph_width_keeps_both_sides_usable() {
+        assert_eq!(PanelSplit::graph_width(100, DEFAULT_PANEL_RATIO), 67);
+        // A third of 90 is under the panel's minimum, so the panel keeps 32.
+        assert_eq!(
+            PanelSplit::graph_width(90, DEFAULT_PANEL_RATIO),
+            90 - MIN_PANEL_COLS
+        );
+        assert_eq!(PanelSplit::graph_width(100, 0.0), MIN_GRAPH_COLS);
+        assert_eq!(PanelSplit::graph_width(100, 1.0), 100 - MIN_PANEL_COLS);
+        // Too narrow for both minimums: the ratio as is.
+        assert_eq!(PanelSplit::graph_width(40, 0.5), 20);
+        assert_eq!(PanelSplit::graph_width(0, 0.5), 0);
+    }
+
+    #[test]
+    fn panel_ratio_survives_session_reset() {
+        let mut app = App::new("OLD".into(), Mode::Live);
+        app.panel_ratio = 0.5;
+        app.handle_ui_event(UiEvent::SessionReset {
+            session_id: "NEW".into(),
+        });
+        assert!((app.panel_ratio - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn transparent_background_survives_session_reset() {
+        let mut app = App::new("OLD".into(), Mode::Live).with_transparent_background();
+        assert!(graph::is_transparent(&app.flow.theme));
+
+        app.handle_ui_event(UiEvent::SessionReset {
+            session_id: "NEW".into(),
+        });
+        assert!(
+            graph::is_transparent(&app.flow.theme),
+            "a session switch must not bring the background back"
+        );
+
+        // The default stays solid.
+        let app = App::new("s".into(), Mode::Live);
+        assert!(!graph::is_transparent(&app.flow.theme));
     }
 
     #[test]
